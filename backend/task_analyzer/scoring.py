@@ -1,8 +1,4 @@
-from typing import Any
-
-
 from datetime import date
-import math
 
 def detect_cycle(task, path=None, visited=None): # DFS -> to detect cycles (A->B->A)
     if path is None:
@@ -25,7 +21,7 @@ def detect_cycle(task, path=None, visited=None): # DFS -> to detect cycles (A->B
 def calculate_priority_score(task): # calculating a priority_score based on Urgency, Importance & Effort
     for dependency in task.dependencies.all():
         if not dependency.is_completed:
-            return -1.0
+            return -1.0, f"Blocked by incomplete task: {dependency.title}"
         
     today = date.today() 
     days_until_due = (task.due_date - today).days # Urgency Factor
@@ -33,7 +29,9 @@ def calculate_priority_score(task): # calculating a priority_score based on Urge
     if days_until_due < 0:
         # PAST DUE: if a task is 1 day late, it's urgent (100). If it's 5 days late, it's critical (125).
         # Adding 100 points, to ensure it tops any future tasks
-        urgency_score = 100 + (abs(days_until_due)*5) 
+        # Cap overdue score to prevent extreme values
+        days_overdue = abs(days_until_due)
+        urgency_score = 100 + min(days_overdue * 5, 200)  # Cap at 300 total
     elif days_until_due == 0:
         # DUE TODAY: Maximum Normal Urgency
         urgency_score = 90
@@ -55,6 +53,22 @@ def calculate_priority_score(task): # calculating a priority_score based on Urge
     elif task.estimated_hours > 8:
         effort_score = -5
 
+    # Generate Explanation
+    reasons = []
+    if urgency_score > 80:
+        reasons.append("Due very soon")
+    if task.importance >= 8:
+        reasons.append("High importance")
+    if effort_score > 0:
+        reasons.append("Quick win (< 2h)")
+    
+    explanation = ", ".join(reasons) if reasons else "Standard priority"
+    
+    if days_until_due < 0:
+        explanation = f"OVERDUE by {abs(days_until_due)} days!"
+    elif days_until_due == 0:
+        explanation = "Due today! " + explanation
+
     total_score = urgency_score + importance_score + effort_score
 
-    return round(total_score, 2)
+    return round(total_score, 2), explanation

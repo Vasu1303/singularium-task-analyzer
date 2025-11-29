@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Manager</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-content">
+                <h1 class="app-title">Task Manager</h1>
+                <p class="app-subtitle">Task prioritization and management</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="content-grid">
+                <!-- Input Section -->
+                <section class="card input-section">
+                    <div class="card-header">
+                        <h2>New Task</h2>
+                        <p class="card-description">Create a new task with required details</p>
+                    </div>
+                    <div class="input-mode-toggle">
+                        <button type="button" class="mode-btn active" data-mode="form" id="formModeBtn">Form</button>
+                        <button type="button" class="mode-btn" data-mode="json" id="jsonModeBtn">JSON</button>
+                    </div>
+                    <div id="formInputSection">
+                        <form id="taskForm" class="task-form">
+                        <div class="form-group">
+                            <label for="title" class="form-label">Task Title</label>
+                            <input 
+                                type="text" 
+                                id="title" 
+                                class="form-input" 
+                                required 
+                                placeholder="Enter task description"
+                                autocomplete="off"
+                            >
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="dueDate" class="form-label">Due Date</label>
+                                <input 
+                                    type="date" 
+                                    id="dueDate" 
+                                    class="form-input" 
+                                    required
+                                >
+                            </div>
+                            <div class="form-group">
+                                <label for="hours" class="form-label">Estimated Hours</label>
+                                <input 
+                                    type="number" 
+                                    id="hours" 
+                                    class="form-input" 
+                                    step="0.5" 
+                                    min="0.1" 
+                                    required
+                                    placeholder="2.5"
+                                >
+                            </div>
+                            <div class="form-group">
+                                <label for="importance" class="form-label">Importance</label>
+                                <div class="importance-input-wrapper">
+                                    <input 
+                                        type="number" 
+                                        id="importance" 
+                                        class="form-input" 
+                                        min="1" 
+                                        max="10" 
+                                        value="5" 
+                                        required
+                                    >
+                                    <span class="importance-scale">1-10</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="dependencies" class="form-label">Dependencies (Optional)</label>
+                            <select id="dependencies" multiple class="form-select multi-select">
+                            </select>
+                            <small class="form-hint">Hold Ctrl/Cmd to select multiple tasks that must be completed first</small>
+                            <div id="selectedDependencies" class="selected-dependencies"></div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <span class="btn-text">Create Task</span>
+                        </button>
+                        </form>
+                    </div>
+                    <div id="jsonInputSection" class="json-input-section" style="display: none;">
+                        <div class="form-group">
+                            <label for="jsonInput" class="form-label">Paste JSON</label>
+                            <textarea 
+                                id="jsonInput" 
+                                class="form-textarea" 
+                                rows="12"
+                                placeholder='[{"title": "Task 1", "due_date": "2025-12-31", "estimated_hours": 2.5, "importance": 7, "dependencies": []}, {"title": "Task 2", "due_date": "2025-12-30", "estimated_hours": 1.5, "importance": 5, "dependencies": []}]'
+                            ></textarea>
+                            <small class="form-hint">Paste an array of task objects. Each task should have: title, due_date (YYYY-MM-DD), estimated_hours, importance (1-10), and optional dependencies array.</small>
+                        </div>
+                        <button type="button" id="importJsonBtn" class="btn btn-primary">
+                            <span class="btn-text">Import Tasks</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Controls Section -->
+                <section class="card controls-section">
+                    <div class="controls-header">
+                        <h2>Prioritization</h2>
+                        <p class="card-description">Select prioritization strategy</p>
+                    </div>
+                    <div class="controls-content">
+                        <div class="strategy-selector">
+                            <label for="sortStrategy" class="form-label">Prioritization Strategy</label>
+                            <select id="sortStrategy" class="form-select strategy-select">
+                                <option value="smart">Smart Balance (Recommended)</option>
+                                <option value="urgent">Deadline Driven</option>
+                                <option value="important">High Impact</option>
+                                <option value="quick">Fastest Wins</option>
+                            </select>
+                        </div>
+                        <button id="analyzeBtn" class="btn btn-analyze">
+                            <span class="btn-text">Analyze Tasks</span>
+                        </button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Results Section -->
+            <section id="results" class="results-section">
+                <div class="empty-state">
+                    <div class="empty-state-icon"></div>
+                    <h3>No Tasks</h3>
+                    <p>Create tasks and analyze to view prioritized results</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="scripts.js"></script>
+</body>
+</html>
