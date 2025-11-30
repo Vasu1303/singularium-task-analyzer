@@ -565,14 +565,11 @@ The JSON import supports three ways to reference dependencies:
 
 ### Feature Additions
 
-- [ ] **User Authentication**: Multi-user support with personal task lists
 - [ ] **Task Categories/Tags**: Organize tasks by project or category
 - [ ] **Task Templates**: Quick creation from common task patterns
 - [ ] **Export/Import**: Backup and restore task data
 - [ ] **Calendar View**: Visual timeline of due dates
-- [ ] **Notifications**: Browser notifications for upcoming deadlines
 - [ ] **Task History**: Track completion times and patterns
-- [ ] **Collaboration**: Share tasks and dependencies with team members
 
 
 ## 🐛 Known Issues
