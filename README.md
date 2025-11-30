@@ -2,6 +2,10 @@
 
 A sophisticated task management system that intelligently prioritizes tasks based on urgency, importance, effort, and dependencies. Built with Django REST API backend and vanilla JavaScript frontend, this application helps you focus on what matters most.
 
+<img width="1684" height="977" alt="image" src="https://github.com/user-attachments/assets/6b3fd9ff-13f8-4168-bbf9-35bb498288a1" />
+<img width="1358" height="1019" alt="image" src="https://github.com/user-attachments/assets/fd97a3dc-03fd-4c3e-919e-634871c3a121" />
+
+
 ## Table of Contents
 
 - [Overview](#overview)
