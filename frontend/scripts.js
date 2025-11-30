@@ -1,88 +1,262 @@
 const API_URL = 'http://127.0.0.1:8000/api/tasks';
 
-let currentTasks = []
+let currentTasks = [];
+
+// Global variables to prevent duplicate message spam
+let lastMessage = "";
+let lastMessageTime = 0;
+
+const getEl = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', () => {
-    fetchTasks()
+    fetchTasks();
 
-    document.getElementById('taskForm').addEventListener('submit', handleAddTask);
-    document.getElementById('analyzeBtn').addEventListener('click', analyzeTasks);
-    
-    const depSelect = document.getElementById('dependencies');
+    getEl('taskForm').addEventListener('submit', handleAddTask);
+    getEl('analyzeBtn').addEventListener('click', analyzeTasks);
+
+    const depSelect = getEl('dependencies');
     depSelect.addEventListener('change', updateSelectedDependencies);
-    
-    document.getElementById('formModeBtn').addEventListener('click', () => switchInputMode('form'));
-    document.getElementById('jsonModeBtn').addEventListener('click', () => switchInputMode('json'));
-    document.getElementById('importJsonBtn').addEventListener('click', handleJsonImport);
-});
 
-// Fetch Tasks
+    getEl('formModeBtn').addEventListener('click', () => switchInputMode('form'));
+    getEl('jsonModeBtn').addEventListener('click', () => switchInputMode('json'));
+    getEl('importJsonBtn').addEventListener('click', handleJsonImport);
+});
 
 async function fetchTasks() {
     try {
         const res = await fetch(`${API_URL}/`);
         currentTasks = await res.json();
         updateDependencyDropdown(currentTasks);
-    } catch(err) {
-        console.error('Error fetching tasks:', err)
+    } catch (err) {
+        console.error('Error fetching tasks:', err);
     }
 }
 
-// Add new Task
+async function createTask(payload) {
+    const res = await fetch(`${API_URL}/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+        throw new Error(data.error || 'Failed to create task');
+    }
+    return data;
+}
+
+function buildPayloadFromForm() {
+    const depSelect = getEl('dependencies');
+    const selectedDeps = Array.from(depSelect.selectedOptions).map(opt => opt.value);
+
+    return {
+        title: getEl('title').value,
+        due_date: getEl('dueDate').value,
+        estimated_hours: getEl('hours').value,
+        importance: getEl('importance').value,
+        dependencies: selectedDeps
+    };
+}
 
 async function handleAddTask(e) {
-    e.preventDefault()
-    const depSelect = document.getElementById('dependencies');
-    const selectedDeps = Array.from(depSelect.selectedOptions).map(opt => opt.value)
+    e.preventDefault();
 
-    const payload = {
-        title: document.getElementById('title').value,
-        due_date: document.getElementById('dueDate').value,
-        estimated_hours: document.getElementById('hours').value,
-        importance: document.getElementById('importance').value,
-        dependencies: selectedDeps
-    }
+    // 1. Lock the button
+    const submitBtn = document.querySelector('#taskForm button[type="submit"]');
+    const originalText = submitBtn.innerText;
+    submitBtn.disabled = true;
+    submitBtn.innerText = "Adding...";
+
+    const payload = buildPayloadFromForm();
 
     try {
-        const res = await fetch(`${API_URL}/`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload)
-        })
+        await createTask(payload);
+        showNotification('Task added successfully', 'success');
+        getEl('taskForm').reset();
 
-        const data = await res.json();
-        if (res.ok) {
-            showNotification('Task added successfully', 'success');
-            document.getElementById('taskForm').reset();
+        getEl('dependencies').value = "";
+        updateSelectedDependencies();
+
+        // Delay fetchTasks to ensure notification is visible first
+        setTimeout(() => {
             fetchTasks();
-        } else {
-            showNotification(`Error: ${data.error}`, 'error');
-        }
+        }, 200);
     } catch (err) {
-        alert('Network Error')
+        showNotification(`Error: ${err.message}`, 'error');
+    } finally {
+        // 2. Unlock the button
+        submitBtn.disabled = false;
+        submitBtn.innerText = originalText;
     }
 }
 
-// Analyze & Render
+async function handleJsonImport() {
+    const jsonInput = getEl('jsonInput').value.trim();
+    
+    if (!jsonInput) {
+        showNotification('Please paste JSON data', 'error');
+        return;
+    }
+    
+    let tasksToImport;
+    try {
+        tasksToImport = JSON.parse(jsonInput);
+    } catch (err) {
+        showNotification('Invalid JSON format', 'error');
+        return;
+    }
+    
+    if (!Array.isArray(tasksToImport) || tasksToImport.length === 0) {
+        showNotification('JSON must be an array of task objects', 'error');
+        return;
+    }
+
+    // 1. Context: Map to resolve dependencies (Title -> ID)
+    // Pre-fill with existing tasks from the DB so we can link to them too.
+    const resolvedMap = new Map();
+    currentTasks.forEach(t => {
+        resolvedMap.set(t.title, t.id);      // Resolve by Title
+        resolvedMap.set(String(t.id), t.id);  // Resolve by ID
+    });
+
+    // Queue of tasks to process
+    let pendingTasks = tasksToImport.map((t, index) => ({
+        ...t, 
+        originalIndex: index // Keep track of original index for index-based deps (0, 1)
+    }));
+    
+    let successCount = 0;
+    let errors = [];
+    let madeProgress = true;
+
+    // 2. The Loop: Keep processing as long as we are creating tasks
+    // This allows us to create "Task A" first, so "Task B" (which needs A) can find A's ID.
+    while (pendingTasks.length > 0 && madeProgress) {
+        madeProgress = false;
+        const remainingTasks = [];
+
+        for (const task of pendingTasks) {
+            // Check if all dependencies for this task are already resolved
+            const rawDeps = task.dependencies || [];
+            let allDepsResolved = true;
+            const resolvedDepIds = [];
+
+            for (const dep of rawDeps) {
+                let resolvedId = null;
+
+                // Case A: Index Reference (e.g., 0, 1) in the JSON array
+                if (typeof dep === 'number' && dep < tasksToImport.length) {
+                    // We need to check if the task at that index has been created yet.
+                    // To do this, we look up the title of the task at that index.
+                    const targetTitle = tasksToImport[dep].title;
+                    resolvedId = resolvedMap.get(targetTitle);
+                }
+                
+                // Case B: Title Reference or Existing ID
+                if (!resolvedId) {
+                    resolvedId = resolvedMap.get(dep) || resolvedMap.get(String(dep));
+                }
+
+                if (resolvedId) {
+                    resolvedDepIds.push(resolvedId);
+                } else {
+                    // Dependency not found yet. It might be in 'remainingTasks' waiting for its turn.
+                    allDepsResolved = false; 
+                    break;
+                }
+            }
+
+            if (allDepsResolved) {
+                // DEPENDENCIES READY! We can create this task now.
+                const payload = {
+                    title: task.title,
+                    due_date: task.due_date,
+                    estimated_hours: parseFloat(task.estimated_hours || 1),
+                    importance: parseInt(task.importance || 5),
+                    dependencies: resolvedDepIds // <--- This sends [1, 55], NEVER ["Title"]
+                };
+
+                try {
+                    const data = await createTask(payload);
+                    
+                    // Add to map so future tasks can link to this one
+                    resolvedMap.set(task.title, data.id);
+                    successCount++;
+                    madeProgress = true;
+                } catch (err) {
+                    errors.push(`"${task.title}": ${err.message}`);
+                }
+            } else {
+                // Not ready yet, keep in queue
+                remainingTasks.push(task);
+            }
+        }
+        
+        pendingTasks = remainingTasks;
+    }
+
+    // 3. Final Report
+    if (pendingTasks.length > 0) {
+        const skippedTitles = pendingTasks.map(t => t.title).join(', ');
+        errors.push(`Skipped due to missing/circular dependencies: ${skippedTitles}`);
+    }
+
+    getEl('jsonInput').value = '';
+    
+    // Show notification first, then refresh UI after a delay to ensure notification is visible
+    if (errors.length > 0) {
+        showNotification(`Imported ${successCount}. Errors: ${errors[0]}`, 'error');
+        // Wait for notification to be visible before refreshing
+        setTimeout(async () => {
+            await fetchTasks();
+        }, 200);
+    } else {
+        showNotification(`Successfully imported ${successCount} tasks!`, 'success');
+        // Wait for notification to be visible before refreshing
+        setTimeout(async () => {
+            await fetchTasks();
+            setTimeout(() => analyzeTasks(), 500);
+        }, 200);
+    }
+}
+
+function sortTasks(tasks, strategy) {
+    const sorted = [...tasks];
+
+    if (strategy === 'urgent') {
+        sorted.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+    } else if (strategy === 'important') {
+        sorted.sort((a, b) => b.importance - a.importance);
+    } else if (strategy === 'quick') {
+        sorted.sort((a, b) => a.estimated_hours - b.estimated_hours);
+    }
+
+    return sorted;
+}
+
+function setEmptyState(title, message) {
+    const container = getEl('results');
+    container.innerHTML = `
+        <div class="empty-state">
+            <div class="empty-state-icon"></div>
+            <h3>${title}</h3>
+            <p>${message}</p>
+        </div>
+    `;
+}
 
 async function analyzeTasks() {
-    const resultsDiv = document.getElementById('results');
+    const resultsDiv = getEl('results');
     resultsDiv.innerHTML = '<div class="loading">Analyzing priorities...</div>';
 
     try {
-        const res = await fetch(`${API_URL}/analyze/`, {method: 'POST'});
+        const res = await fetch(`${API_URL}/analyze/`, { method: 'POST' });
         let tasks = await res.json();
 
-        const strategy = document.getElementById('sortStrategy').value;
-
-        if (strategy === 'urgent') {
-            tasks.sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
-        } else if (strategy === 'important') {
-            tasks.sort((a,b) => b.importance - a.importance);
-        } else if (strategy === 'quick') {
-            tasks.sort((a,b) => a.estimated_hours - b.estimated_hours);
-        } else {
-            // Default Score - already sorted by priority_score from backend
+        const strategy = getEl('sortStrategy').value;
+        if (strategy !== 'score') {
+            tasks = sortTasks(tasks, strategy);
         }
 
         renderTasks(tasks);
@@ -92,21 +266,14 @@ async function analyzeTasks() {
 }
 
 function renderTasks(tasks) {
-    const container = document.getElementById('results');
+    const container = getEl('results');
     container.innerHTML = '';
 
-    if (tasks.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon"></div>
-                <h3>No Tasks Found</h3>
-                <p>Add tasks to see prioritized results</p>
-            </div>
-        `;
+    if (!tasks.length) {
+        setEmptyState('No Tasks Found', 'Add tasks to see prioritized results');
         return;
     }
 
-    // Create results grid container
     const grid = document.createElement('div');
     grid.className = 'results-grid';
 
@@ -115,20 +282,21 @@ function renderTasks(tasks) {
         if (task.priority_score > 50) priorityClass = 'medium';
         if (task.priority_score > 80) priorityClass = 'high';
         if (task.priority_score < 0) priorityClass = 'blocked';
-        
+
         const card = document.createElement('div');
         card.className = `task-card ${priorityClass}`;
-        
-        // Format date
+
         const dueDate = new Date(task.due_date);
-        const formattedDate = dueDate.toLocaleDateString('en-US', { 
-            month: 'short', 
-            day: 'numeric', 
-            year: 'numeric' 
+        const formattedDate = dueDate.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
         });
-        
-        // Show blocked dependencies if any
+
         let blockedInfo = '';
+        // Check if backend returned dependency titles (it should if you updated views.py)
+        // If not, we can infer them from currentTasks using the IDs if needed, 
+        // but your Analyze view usually returns names.
         if (task.dependencies && task.dependencies.length > 0) {
             blockedInfo = `
                 <div class="blocked-info">
@@ -136,10 +304,9 @@ function renderTasks(tasks) {
                 </div>
             `;
         }
-        
-        // Format priority score
+
         const scoreDisplay = task.priority_score < 0 ? 'Blocked' : task.priority_score.toFixed(1);
-        
+
         card.innerHTML = `
             <div class="score-badge">Priority #${index + 1}</div>
             <h3>${task.title}</h3>
@@ -173,24 +340,24 @@ function renderTasks(tasks) {
         `;
         grid.appendChild(card);
     });
-    
+
     container.innerHTML = '';
     container.appendChild(grid);
-};
+}
 
 async function markComplete(id) {
-    if (!confirm("Mark this task as complete?")) return;
-    
+    if (!confirm('Mark this task as complete?')) return;
+
     try {
-        const res = await fetch(`${API_URL}/${id}/complete/`, { 
+        const res = await fetch(`${API_URL}/${id}/complete/`, {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'}
+            headers: { 'Content-Type': 'application/json' }
         });
-        
+
         if (res.ok) {
             showNotification('Task marked as complete!', 'success');
-            analyzeTasks(); // Refresh the list
-            fetchTasks(); // Update dependency dropdown
+            analyzeTasks();
+            fetchTasks();
         } else {
             const data = await res.json();
             showNotification(`Error: ${data.error || 'Failed to complete task'}`, 'error');
@@ -201,35 +368,97 @@ async function markComplete(id) {
     }
 }
 
+async function deleteTask(id) {
+    if (!confirm('Are you sure you want to permanently delete this task?')) return;
+
+    try {
+        const res = await fetch(`${API_URL}/${id}/delete/`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (res.ok) {
+            showNotification('Task deleted. Priority will be re-calculated.', 'info');
+            fetchTasks(); // Update context for dropdowns
+            setTimeout(() => analyzeTasks(), 200); // Update UI
+        } else {
+            const data = await res.json();
+            showNotification(`Error: ${data.error || 'Failed to delete task'}`, 'error');
+        }
+    } catch (err) {
+        console.error('Delete error:', err);
+        showNotification('Network error. Please try again.', 'error');
+    }
+}
+
 function showNotification(message, type = 'info') {
-    // Remove existing notification if any
-    const existing = document.querySelector('.notification');
-    if (existing) {
-        existing.remove();
+    // 1. Debounce: Prevent the exact same message from appearing twice in < 1 second
+    const now = Date.now();
+    if (message === lastMessage && now - lastMessageTime < 1000) {
+        return;
+    }
+    lastMessage = message;
+    lastMessageTime = now;
+
+    // 2. Create a container if it doesn't exist (this holds the stack)
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+
+        // Style the container to be fixed in the top-right
+        container.style.position = 'fixed';
+        container.style.top = '20px';
+        container.style.right = '20px';
+        container.style.zIndex = '10000';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px'; // Space between toasts
+        container.style.pointerEvents = 'none'; // Click-through empty space
     }
 
+    // 3. Create the notification element
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
     notification.textContent = message;
-    document.body.appendChild(notification);
 
-    // Trigger animation
+    // IMPORTANT: Reset fixed positioning so they stack inside the flex container
+    notification.style.position = 'relative';
+    notification.style.top = 'auto';
+    notification.style.right = 'auto';
+    notification.style.pointerEvents = 'auto'; // Re-enable clicking on the toast itself
+
+    container.appendChild(notification);
+
+    // 4. Animation In - Force reflow to ensure browser renders initial state, then add .show class
+    notification.offsetHeight; // Force reflow
     setTimeout(() => {
-        notification.classList.add('show');
+        if (notification.parentNode) {
+            notification.classList.add('show');
+        }
     }, 10);
 
-    // Remove after 3 seconds
-    setTimeout(() => {
+    // 5. Click to dismiss
+    notification.addEventListener('click', () => {
         notification.classList.remove('show');
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+            if (container.childNodes.length === 0) {
+                container.remove();
+            }
+        }, 300);
+    });
+
 }
 
 function updateDependencyDropdown(tasks) {
-    const select = document.getElementById('dependencies');
+    const select = getEl('dependencies');
     const currentSelected = Array.from(select.selectedOptions).map(opt => opt.value);
     const availableTaskIds = tasks.map(t => String(t.id));
-    
+
     select.innerHTML = '';
     tasks.forEach(t => {
         const opt = document.createElement('option');
@@ -240,25 +469,21 @@ function updateDependencyDropdown(tasks) {
         }
         select.appendChild(opt);
     });
-    
+
     updateSelectedDependencies();
 }
 
 function updateSelectedDependencies() {
-    const select = document.getElementById('dependencies');
+    const select = getEl('dependencies');
     const selectedOptions = Array.from(select.selectedOptions);
-    const container = document.getElementById('selectedDependencies');
+    const container = getEl('selectedDependencies');
     container.innerHTML = '';
-    
-    if (selectedOptions.length === 0) {
-        return;
-    }
-    
+
+    if (!selectedOptions.length) return;
+
     selectedOptions.forEach(option => {
-        if (!option.value || option.value === '') {
-            return;
-        }
-        
+        if (!option.value) return;
+
         const chip = document.createElement('div');
         chip.className = 'dependency-chip';
         chip.innerHTML = `
@@ -267,32 +492,23 @@ function updateSelectedDependencies() {
                 <span class="chip-delete-icon">×</span>
             </button>
         `;
-        
+
         const deleteBtn = chip.querySelector('.chip-delete');
         deleteBtn.addEventListener('click', () => {
             option.selected = false;
             updateSelectedDependencies();
         });
-        
+
         container.appendChild(chip);
     });
 }
 
-function removeDependency(depId) {
-    const select = document.getElementById('dependencies');
-    const option = select.querySelector(`option[value="${depId}"]`);
-    if (option) {
-        option.selected = false;
-        updateSelectedDependencies();
-    }
-}
-
 function switchInputMode(mode) {
-    const formSection = document.getElementById('formInputSection');
-    const jsonSection = document.getElementById('jsonInputSection');
-    const formBtn = document.getElementById('formModeBtn');
-    const jsonBtn = document.getElementById('jsonModeBtn');
-    
+    const formSection = getEl('formInputSection');
+    const jsonSection = getEl('jsonInputSection');
+    const formBtn = getEl('formModeBtn');
+    const jsonBtn = getEl('jsonModeBtn');
+
     if (mode === 'form') {
         formSection.style.display = 'block';
         jsonSection.style.display = 'none';
@@ -303,150 +519,5 @@ function switchInputMode(mode) {
         jsonSection.style.display = 'block';
         jsonBtn.classList.add('active');
         formBtn.classList.remove('active');
-    }
-}
-
-async function handleJsonImport() {
-    const jsonInput = document.getElementById('jsonInput').value.trim();
-    
-    if (!jsonInput) {
-        showNotification('Please paste JSON data', 'error');
-        return;
-    }
-    
-    let tasks;
-    try {
-        tasks = JSON.parse(jsonInput);
-    } catch (err) {
-        showNotification('Invalid JSON format. Please check your syntax.', 'error');
-        return;
-    }
-    
-    if (!Array.isArray(tasks)) {
-        showNotification('JSON must be an array of task objects', 'error');
-        return;
-    }
-    
-    if (tasks.length === 0) {
-        showNotification('No tasks found in JSON', 'error');
-        return;
-    }
-    
-    let successCount = 0;
-    let errorCount = 0;
-    const errors = [];
-    
-    for (let i = 0; i < tasks.length; i++) {
-        const task = tasks[i];
-        
-        if (!task.title || !task.due_date || task.estimated_hours === undefined || task.importance === undefined) {
-            errorCount++;
-            errors.push(`Task ${i + 1}: Missing required fields (title, due_date, estimated_hours, importance)`);
-            continue;
-        }
-        
-        if (task.importance < 1 || task.importance > 10) {
-            errorCount++;
-            errors.push(`Task ${i + 1}: Importance must be between 1 and 10`);
-            continue;
-        }
-        
-        if (task.estimated_hours <= 0) {
-            errorCount++;
-            errors.push(`Task ${i + 1}: Estimated hours must be greater than 0`);
-            continue;
-        }
-        
-        const payload = {
-            title: task.title,
-            due_date: task.due_date,
-            estimated_hours: parseFloat(task.estimated_hours),
-            importance: parseInt(task.importance),
-            dependencies: Array.isArray(task.dependencies) ? task.dependencies : []
-        };
-        
-        try {
-            const res = await fetch(`${API_URL}/`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            
-            const data = await res.json();
-            if (res.ok) {
-                successCount++;
-            } else {
-                errorCount++;
-                errors.push(`Task ${i + 1}: ${data.error || 'Failed to create'}`);
-            }
-        } catch (err) {
-            errorCount++;
-            errors.push(`Task ${i + 1}: Network error`);
-        }
-    }
-    
-    if (successCount > 0) {
-        showNotification(`Successfully imported ${successCount} task(s)`, 'success');
-        document.getElementById('jsonInput').value = '';
-        fetchTasks();
-    }
-    
-    if (errorCount > 0) {
-        const errorMsg = errors.length > 3 
-            ? `${errors.slice(0, 3).join('; ')}... (${errorCount} errors total)`
-            : errors.join('; ');
-        showNotification(`Failed to import ${errorCount} task(s): ${errorMsg}`, 'error');
-    }
-}
-
-async function deleteTask(id) {
-    if (!confirm("Are you sure you want to permanently delete this task?")) return;
-    
-    try {
-        const url = `${API_URL}/${id}/delete/`;
-        console.log('Deleting task at URL:', url);
-        
-        const res = await fetch(url, {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        });
-        
-        console.log('Delete response status:', res.status);
-        
-        if (res.ok) {
-            const data = await res.json();
-            console.log('Delete response:', data);
-            showNotification('Task deleted successfully', 'success');
-            
-            const depSelect = document.getElementById('dependencies');
-            const selectedDeps = Array.from(depSelect.selectedOptions).map(opt => opt.value);
-            
-            fetchTasks().then(() => {
-                const updatedSelect = document.getElementById('dependencies');
-                const availableIds = Array.from(updatedSelect.options).map(opt => opt.value);
-                
-                selectedDeps.forEach(depId => {
-                    if (!availableIds.includes(depId)) {
-                        const option = updatedSelect.querySelector(`option[value="${depId}"]`);
-                        if (option) {
-                            option.selected = false;
-                        }
-                    }
-                });
-                
-                updateSelectedDependencies();
-            });
-            
-            analyzeTasks();
-        } else {
-            const data = await res.json().catch(() => ({ error: 'Unknown error' }));
-            console.error('Delete failed:', data);
-            showNotification(`Error: ${data.error || 'Failed to delete task'}`, 'error');
-        }
-    } catch (err) {
-        console.error('Delete error:', err);
-        showNotification('Network error. Please try again.', 'error');
     }
 }

@@ -638,19 +638,17 @@ body {
 
 /* ===== Notifications ===== */
 .notification {
-    position: fixed;
-    top: var(--spacing-xl);
-    right: var(--spacing-xl);
+    /* Container handles fixed positioning; .notification is just the card */
     padding: var(--spacing-md) var(--spacing-lg);
     border-radius: var(--border-radius-sm);
     box-shadow: var(--shadow-lg);
     font-weight: 500;
-    z-index: 1000;
     transform: translateX(400px);
     opacity: 0;
     transition: all 0.3s ease;
     max-width: 400px;
     font-size: 0.875rem;
+    cursor: pointer;
 }
 
 .notification.show {
